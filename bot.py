@@ -44,28 +44,53 @@ class BasedBot(commands.Bot):
         self.db = Database(BASE_DIR / "data" / "jobs.db", settings.enable_history)
         self.loop: asyncio.AbstractEventLoop | None = None
 
+    async def _sync_report(self) -> str:
+        import discord as _d
+        exts = sorted(self.extensions.keys())
+        cogs = sorted(self.cogs.keys())
+        cmds: list[str] = []
+        for c in self.tree.get_commands():
+            cmds.append(c.name)
+            if hasattr(c, "commands"):
+                cmds.extend(f"{c.name} {s.name}" for s in c.commands)  # type: ignore
+        return (
+            f"discord.py {_d.__version__} | extensions: {exts or 'NONE'} | "
+            f"cogs: {cogs or 'NONE'} | tree: {sorted(cmds) or 'EMPTY'}"
+        )
+
+    async def do_sync(self) -> tuple[str, str]:
+        """Returns (user-facing message, log detail)."""
+        log = logging.getLogger("based")
+        try:
+            gid = self.settings.guild_id
+            if gid:
+                synced = await self.tree.sync(guild=discord.Object(id=gid))
+                scope = f"guild {gid} (should appear instantly)"
+            else:
+                synced = await self.tree.sync()
+                scope = "global (can take up to 1h to appear)"
+            names = ", ".join(f"/{c.name}" for c in synced)
+            detail = await self._sync_report()
+            log.info("Sync: %d commands to %s. %s", len(synced), scope, detail)
+            return f"Synced {len(synced)} commands to {scope}: {names}", detail
+        except Exception as e:
+            log.exception("Sync failed")
+            detail = await self._sync_report()
+            return f"Resync failed: {type(e).__name__} — check logs.", detail
+
     async def setup_hook(self):
         log = logging.getLogger("based")
         self.loop = asyncio.get_running_loop()
         self.registry.load(load_engine_configs(self.settings.engines_file))
         await self.registry.health_check_all()
-        await self.load_extension("cogs.deobfuscate")
-        await self.load_extension("cogs.jobs")
-        gid = self.settings.guild_id
-        try:
-            if gid:
-                synced = await self.tree.sync(guild=discord.Object(id=gid))
-                log.info("Slash sync: %d commands to guild %s: %s",
-                         len(synced), gid, [c.name for c in synced])
-            else:
-                synced = await self.tree.sync()
-                log.info("Slash sync: %d commands globally (can take up to 1h to appear): %s",
-                         len(synced), [c.name for c in synced])
-        except discord.HTTPException as e:
-            log.error("Slash sync FAILED: %s (status %s). "
-                      "Reinvite with 'applications.commands' scope.", e.text, e.status)
-        except Exception:
-            log.exception("Slash sync FAILED with unexpected error.")
+        for ext in ("cogs.deobfuscate", "cogs.jobs"):
+            try:
+                await self.load_extension(ext)
+                log.info("Extension loaded: %s", ext)
+            except Exception:
+                log.exception("FAILED to load extension: %s", ext)
+        msg, detail = await self.do_sync()
+        log.info("Startup sync -> %s | %s", msg, detail)
 
     async def on_message(self, message: discord.Message):
         if message.author.bot or not message.guild:
@@ -79,19 +104,12 @@ class BasedBot(commands.Bot):
                 return
             log = logging.getLogger("based")
             try:
-                gid = self.settings.guild_id
-                if gid:
-                    synced = await self.tree.sync(guild=discord.Object(id=gid))
-                    scope = f"guild {gid} (should appear instantly)"
-                else:
-                    synced = await self.tree.sync()
-                    scope = "global (can take up to 1h to appear)"
-                names = ", ".join(f"/{c.name}" for c in synced)
-                log.info("Manual !resync by %s: %d commands to %s", message.author.id, len(synced), scope)
-                await message.channel.send(f"Synced {len(synced)} commands to {scope}: {names}")
-            except Exception as e:
+                msg, detail = await self.do_sync()
+                log.info("Manual !resync by %s -> %s", message.author.id, msg)
+                await message.channel.send(msg + "\n`" + detail + "`")
+            except Exception:
                 log.exception("Manual !resync failed")
-                await message.channel.send(f"Resync failed: {type(e).__name__} — check logs.")
+                await message.channel.send("Resync failed unexpectedly — check logs.")
         await self.process_commands(message)
 
     async def on_ready(self):
