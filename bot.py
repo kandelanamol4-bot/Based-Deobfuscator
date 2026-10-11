@@ -35,6 +35,7 @@ def setup_logging(level: str) -> logging.Logger:
 class BasedBot(commands.Bot):
     def __init__(self, settings: Settings):
         intents = discord.Intents.default()
+        intents.message_content = True  # needed for !resync / !ping text fallback
         super().__init__(command_prefix="!", intents=intents)
         self.settings = settings
         self.jobs = JobManager()
@@ -44,16 +45,54 @@ class BasedBot(commands.Bot):
         self.loop: asyncio.AbstractEventLoop | None = None
 
     async def setup_hook(self):
+        log = logging.getLogger("based")
         self.loop = asyncio.get_running_loop()
         self.registry.load(load_engine_configs(self.settings.engines_file))
         await self.registry.health_check_all()
         await self.load_extension("cogs.deobfuscate")
         await self.load_extension("cogs.jobs")
         gid = self.settings.guild_id
-        if gid:
-            await self.tree.sync(guild=discord.Object(id=gid))
-        else:
-            await self.tree.sync()
+        try:
+            if gid:
+                synced = await self.tree.sync(guild=discord.Object(id=gid))
+                log.info("Slash sync: %d commands to guild %s: %s",
+                         len(synced), gid, [c.name for c in synced])
+            else:
+                synced = await self.tree.sync()
+                log.info("Slash sync: %d commands globally (can take up to 1h to appear): %s",
+                         len(synced), [c.name for c in synced])
+        except discord.HTTPException as e:
+            log.error("Slash sync FAILED: %s (status %s). "
+                      "Reinvite with 'applications.commands' scope.", e.text, e.status)
+        except Exception:
+            log.exception("Slash sync FAILED with unexpected error.")
+
+    async def on_message(self, message: discord.Message):
+        if message.author.bot or not message.guild:
+            return
+        if message.content.strip() == "!ping":
+            await message.channel.send("Based Deobfuscator is online.")
+            return
+        if message.content.strip() == "!resync":
+            if message.author.id not in self.settings.admin_user_ids:
+                await message.channel.send("Not authorized.")
+                return
+            log = logging.getLogger("based")
+            try:
+                gid = self.settings.guild_id
+                if gid:
+                    synced = await self.tree.sync(guild=discord.Object(id=gid))
+                    scope = f"guild {gid} (should appear instantly)"
+                else:
+                    synced = await self.tree.sync()
+                    scope = "global (can take up to 1h to appear)"
+                names = ", ".join(f"/{c.name}" for c in synced)
+                log.info("Manual !resync by %s: %d commands to %s", message.author.id, len(synced), scope)
+                await message.channel.send(f"Synced {len(synced)} commands to {scope}: {names}")
+            except Exception as e:
+                log.exception("Manual !resync failed")
+                await message.channel.send(f"Resync failed: {type(e).__name__} — check logs.")
+        await self.process_commands(message)
 
     async def on_ready(self):
         log = logging.getLogger("based")
