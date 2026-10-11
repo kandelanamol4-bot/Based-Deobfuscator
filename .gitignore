@@ -1,0 +1,8 @@
+__pycache__/
+.venv/
+.env
+data/*.db
+logs/*.log
+temp/*
+!.gitkeep
+*.pyc

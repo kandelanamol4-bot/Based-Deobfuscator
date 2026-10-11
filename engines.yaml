@@ -1,0 +1,34 @@
+# Based Deobfuscator — engine definitions.
+# Only engines listed here AND verified available at startup are shown to users.
+
+engines:
+  - id: bundled_prettify
+    display_name: "Bundled Normalizer"
+    description: "Local safe transform: decodes simple string escapes, reformats. Handles plain/minified Lua only."
+    module: "engines.adapters.bundled_adapter:BundledPrettifyEngine"
+    enabled: true
+    timeout_seconds: 30
+    supports_auto_detect: true
+    kind: bundled
+    lua_versions: ["5.1", "5.2", "5.3", "5.4", "luau"]
+    obfuscator_families: ["plain", "minified", "simple-hex-rename", "decimal-string-escape"]
+
+  - id: luraph_v15
+    display_name: "Luraph Deobfuscator"
+    description: "Deobfuscator-Luraph-V15 (Node.js CLI): full devirtualization for Luraph v15 Luau VM scripts; experimental v14. Verified 2026-10-11."
+    module: "engines.adapters.luraph_adapter:LuraphEngine"
+    enabled: true
+    timeout_seconds: 600
+    supports_auto_detect: true
+    kind: local
+    lua_versions: ["luau"]
+    obfuscator_families: ["luraph-v15", "luraph-v14"]
+    # Verified install on this machine (bot must run here or update these paths):
+    tool_dir: "C:\\Users\\kande\\OneDrive\\Desktop\\Deobfuscator-Luraph-V15"
+    node_bin: "node"
+    script: "deob.js"
+    version: "1.0.0"
+    pass_timeout: 300        # --timeout per Luau execution pass
+    pass_budget: 120         # --budget soft execution budget
+    env:
+      PYTHON_BIN: "python"
